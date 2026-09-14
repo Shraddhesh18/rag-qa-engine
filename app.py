@@ -13,26 +13,44 @@ with st.sidebar:
     uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"])
 
 if uploaded_file:
-    # Save file temporarily for local parsing
     temp_file_path = f"temp_{uploaded_file.name}"
-    with open(temp_file_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
 
-    st.sidebar.success("File uploaded successfully.")
+    # Check if a new file was uploaded or if it's already indexed in session state
+    if "current_file" not in st.session_state or st.session_state["current_file"] != uploaded_file.name:
+        with open(temp_file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
 
-    # Process PDF and initialize QA Chain
-    with st.spinner("Chunking text & indexing into vector database..."):
-        vectorstore = process_pdf(temp_file_path)
-        qa_chain = get_qa_chain(vectorstore)
-    
-    st.sidebar.info("Indexing complete.")
+        st.sidebar.success("File uploaded successfully.")
+
+        # Process PDF and initialize QA Chain
+        with st.spinner("Chunking text & indexing into vector database..."):
+            try:
+                vectorstore = process_pdf(temp_file_path)
+                qa_chain = get_qa_chain(vectorstore)
+                
+                # Store in session state to prevent reprocessing on every user interaction
+                st.session_state["qa_chain"] = qa_chain
+                st.session_state["current_file"] = uploaded_file.name
+                st.sidebar.info("Indexing complete.")
+            except Exception as e:
+                st.error(f"Error processing document: {e}")
+                st.stop()
+            finally:
+                # Safely attempt temporary file removal with Windows file-lock protection
+                if os.path.exists(temp_file_path):
+                    try:
+                        os.remove(temp_file_path)
+                    except PermissionError:
+                        pass
+    else:
+        st.sidebar.info("Indexing complete.")
 
     # Interface for user queries
     user_query = st.text_input("Ask a question about the document:")
 
-    if user_query:
+    if user_query and "qa_chain" in st.session_state:
         with st.spinner("Searching document context & generating response..."):
-            response = qa_chain.invoke({"input": user_query})
+            response = st.session_state["qa_chain"].invoke({"input": user_query})
             
             st.markdown("### Answer:")
             st.write(response["answer"])
@@ -44,8 +62,8 @@ if uploaded_file:
                     st.write(f"_{doc.page_content}_")
                     st.divider()
 
-    # Clean up local temporary file
-    if os.path.exists(temp_file_path):
-        os.remove(temp_file_path)
 else:
+    # Clear session state if file is removed
+    st.session_state.pop("qa_chain", None)
+    st.session_state.pop("current_file", None)
     st.info("Upload a PDF file using the sidebar to start asking questions.")
